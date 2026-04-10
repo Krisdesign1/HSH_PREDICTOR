@@ -130,7 +130,7 @@ def cmd_serve(args):
     """Lance l'application web locale."""
     import uvicorn
 
-    host = args.host or os.getenv("HOST", "127.0.0.1")
+    host = args.host or os.getenv("HOST") or ("0.0.0.0" if os.getenv("PORT") else "127.0.0.1")
     port = args.port or int(os.getenv("PORT", "8000"))
 
     uvicorn.run(

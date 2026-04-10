@@ -107,7 +107,7 @@ DEFAULT_BANKROLL=1000
 Le démarrage utilisé par Railway est :
 
 ```bash
-python main.py serve --host 0.0.0.0 --port $PORT
+python main.py serve
 ```
 
 Healthcheck :

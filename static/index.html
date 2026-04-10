@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>HSH Predictor Platform</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Space+Grotesk:wght@400;500;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <div class="bg-glow glow-a"></div>
+  <div class="bg-glow glow-b"></div>
+
+  <main class="shell">
+    <section class="hero panel">
+      <div class="eyebrow">HSH Predictor Platform</div>
+      <div class="hero-grid">
+        <div>
+          <h1>Pronostics HSH automatises, publies et consultables.</h1>
+          <p class="hero-copy">
+            L'utilisateur ne lance aucune analyse. Le backend synchronise les matchs,
+            publie les pronostics du jour et l'application expose uniquement les recommandations deja calculees.
+          </p>
+        </div>
+        <div class="hero-status">
+          <div class="status-card">
+            <span class="label">Scheduler</span>
+            <strong id="scheduler-status">Verification...</strong>
+          </div>
+          <div class="status-card">
+            <span class="label">Base de donnees</span>
+            <strong id="database-status">Verification...</strong>
+          </div>
+          <div class="status-card">
+            <span class="label">Derniere publication</span>
+            <strong id="last-run-at">-</strong>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="stats-grid">
+      <article class="stat-panel panel">
+        <span class="label">Matchs du jour</span>
+        <strong id="metric-total-matches">0</strong>
+      </article>
+      <article class="stat-panel panel">
+        <span class="label">Pronostics publies</span>
+        <strong id="metric-published">0</strong>
+      </article>
+      <article class="stat-panel panel">
+        <span class="label">Value bets</span>
+        <strong id="metric-value-bets">0</strong>
+      </article>
+      <article class="stat-panel panel">
+        <span class="label">ROI historique</span>
+        <strong id="metric-roi">0%</strong>
+      </article>
+      <article class="stat-panel panel">
+        <span class="label">Hit rate</span>
+        <strong id="metric-hit-rate">0%</strong>
+      </article>
+      <article class="stat-panel panel">
+        <span class="label">Profit cumule</span>
+        <strong id="metric-profit">0$</strong>
+      </article>
+    </section>
+
+    <section class="content-grid">
+      <section class="panel list-panel">
+        <div class="section-head">
+          <div>
+            <div class="eyebrow">Jour J</div>
+            <h2>Pronostics publies</h2>
+          </div>
+          <button id="refresh-btn" class="ghost-button" type="button">Rafraichir</button>
+        </div>
+
+        <div class="filters">
+          <label class="field">
+            <span class="label">Recherche</span>
+            <input id="search-input" type="text" placeholder="Equipe ou ligue">
+          </label>
+          <label class="field">
+            <span class="label">Confiance</span>
+            <select id="confidence-filter">
+              <option value="ALL">Toutes</option>
+              <option value="HIGH">HIGH</option>
+              <option value="MEDIUM">MEDIUM</option>
+              <option value="LOW">LOW</option>
+            </select>
+          </label>
+          <label class="toggle">
+            <input id="value-only-toggle" type="checkbox">
+            <span>Value bets seulement</span>
+          </label>
+        </div>
+
+        <div id="predictions-list" class="prediction-list"></div>
+      </section>
+
+      <section class="panel detail-panel">
+        <div class="section-head">
+          <div>
+            <div class="eyebrow">Analyse publiee</div>
+            <h2>Detail du pronostic</h2>
+          </div>
+          <div id="detail-badge" class="badge neutral">Aucune selection</div>
+        </div>
+
+        <div id="detail-card" class="detail-card empty">
+          <h3>Aucun pronostic selectionne</h3>
+          <p>Choisis un match publie dans la liste pour voir les probabilites, la value bet, l'explication et le Kelly.</p>
+        </div>
+      </section>
+    </section>
+
+    <section class="bottom-grid">
+      <section class="panel history-panel">
+        <div class="section-head">
+          <div>
+            <div class="eyebrow">Historique</div>
+            <h2>Pronostics grades</h2>
+          </div>
+          <span class="mono" id="history-count">0 lignes</span>
+        </div>
+        <div id="history-list" class="history-list"></div>
+      </section>
+
+      <section class="panel admin-panel">
+        <div class="section-head">
+          <div>
+            <div class="eyebrow">Administration</div>
+            <h2>Scheduler et jobs</h2>
+          </div>
+          <button id="run-now-btn" class="primary-button" type="button">Declencher un cycle</button>
+        </div>
+
+        <div class="admin-summary">
+          <div class="admin-card">
+            <span class="label">Etat</span>
+            <strong id="admin-state">idle</strong>
+          </div>
+          <div class="admin-card">
+            <span class="label">Intervalle</span>
+            <strong id="admin-interval">-</strong>
+          </div>
+          <div class="admin-card">
+            <span class="label">Dernier statut</span>
+            <strong id="admin-last-status">-</strong>
+          </div>
+        </div>
+
+        <div id="admin-report" class="admin-report empty-state">
+          Aucun rapport de cycle disponible pour le moment.
+        </div>
+
+        <div id="runs-list" class="runs-list"></div>
+      </section>
+    </section>
+  </main>
+
+  <script src="/static/app.js" defer></script>
+</body>
+</html>

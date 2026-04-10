@@ -83,6 +83,7 @@ Notes :
 ## Déploiement Railway
 
 Le repo contient déjà [railway.toml](./railway.toml). La stratégie actuelle est un service web unique avec scheduler in-process.
+La version Python est épinglée via `.python-version` pour éviter le build par défaut en Python 3.13, incompatible avec les versions actuelles de `numpy` et `scikit-learn`.
 
 ### Étapes
 

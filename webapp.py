@@ -23,6 +23,11 @@ logger = logging.getLogger(__name__)
 
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
+STARTUP_STATE: dict[str, Any] = {
+    "database_ready": False,
+    "scheduler_started": False,
+    "startup_error": None,
+}
 
 app = FastAPI(title="HSH Predictor Platform", version="3.0")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
@@ -202,8 +207,21 @@ def _dashboard_payload() -> dict[str, Any]:
 
 @app.on_event("startup")
 def on_startup() -> None:
-    init_db()
-    start_scheduler()
+    try:
+        init_db()
+        STARTUP_STATE["database_ready"] = True
+    except Exception as exc:
+        STARTUP_STATE["database_ready"] = False
+        STARTUP_STATE["startup_error"] = f"db_init_failed: {exc}"
+        logger.exception("Initialisation DB impossible au démarrage")
+
+    try:
+        start_scheduler()
+        STARTUP_STATE["scheduler_started"] = True
+    except Exception as exc:
+        STARTUP_STATE["scheduler_started"] = False
+        STARTUP_STATE["startup_error"] = f"scheduler_start_failed: {exc}"
+        logger.exception("Démarrage scheduler impossible")
 
 
 @app.on_event("shutdown")
@@ -223,15 +241,27 @@ def health() -> dict[str, Any]:
             cur = conn.cursor()
             cur.execute("SELECT COUNT(*) FROM matches")
             match_count = cur.fetchone()[0]
+        scheduler = scheduler_snapshot()
     except Exception as exc:
         logger.warning("Healthcheck DB KO: %s", exc)
-        return {"status": "degraded", "database": False, "match_count": 0}
+        return {
+            "status": "degraded",
+            "database": False,
+            "match_count": 0,
+            "scheduler": {
+                "enabled": False,
+                "running": False,
+            },
+            "startup": STARTUP_STATE,
+            "error": str(exc),
+        }
 
     return {
         "status": "ok",
         "database": True,
         "match_count": match_count,
-        "scheduler": scheduler_snapshot(),
+        "scheduler": scheduler,
+        "startup": STARTUP_STATE,
     }
 
 

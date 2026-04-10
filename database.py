@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 @contextmanager
 def get_conn():
     """Context manager pour connexion PostgreSQL."""
-    conn = psycopg2.connect(DATABASE_URL)
+    conn = psycopg2.connect(DATABASE_URL, connect_timeout=5)
     try:
         yield conn
         conn.commit()

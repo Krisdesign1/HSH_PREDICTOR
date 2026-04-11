@@ -2,6 +2,7 @@
 #  HSH PREDICTOR — Feature Engineering
 # ============================================================
 
+from datetime import datetime
 import numpy as np
 import pandas as pd
 import logging
@@ -11,8 +12,24 @@ import psycopg2.extras
 logger = logging.getLogger(__name__)
 
 
-def compute_team_hsh_stats(team_id: int, league_id: int,
-                            as_home: bool = True, last_n: int = 20) -> dict:
+def _coerce_datetime(value):
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, str):
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    return value
+
+
+def compute_team_hsh_stats(
+    team_id: int,
+    league_id: int,
+    as_home: bool = True,
+    last_n: int = 20,
+    before_date = None,
+    exclude_match_id: int = None,
+) -> dict:
     """
     Calcule les stats HSH d'une équipe sur ses N derniers matchs.
     Retourne un dict de features.
@@ -21,7 +38,7 @@ def compute_team_hsh_stats(team_id: int, league_id: int,
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
         field = "home_id" if as_home else "away_id"
-        cur.execute(f"""
+        query = f"""
             SELECT hsh_result, hsh_goals_h1, hsh_goals_h2,
                    ht_home, ht_away, ft_home, ft_away
             FROM matches
@@ -29,9 +46,21 @@ def compute_team_hsh_stats(team_id: int, league_id: int,
               AND league_id = %s
               AND has_ht_data = TRUE
               AND hsh_result IS NOT NULL
-            ORDER BY match_date DESC
-            LIMIT %s
-        """, (team_id, league_id, last_n))
+        """
+        params = [team_id, league_id]
+
+        if before_date is not None:
+            query += " AND match_date < %s"
+            params.append(before_date)
+
+        if exclude_match_id is not None:
+            query += " AND footystats_id <> %s"
+            params.append(exclude_match_id)
+
+        query += " ORDER BY match_date DESC LIMIT %s"
+        params.append(last_n)
+
+        cur.execute(query, params)
 
         rows = cur.fetchall()
 
@@ -79,14 +108,28 @@ def build_match_features(match: dict, league_group: str) -> dict:
     home_id   = match["home_id"]
     away_id   = match["away_id"]
     league_id = match["league_id"]
+    as_of_date = _coerce_datetime(match.get("match_date"))
+    exclude_match_id = match.get("footystats_id")
 
     # Stats des 20 derniers matchs à domicile/extérieur
-    home_stats = compute_team_hsh_stats(home_id, league_id, as_home=True,  last_n=20)
-    away_stats = compute_team_hsh_stats(away_id, league_id, as_home=False, last_n=20)
+    home_stats = compute_team_hsh_stats(
+        home_id, league_id, as_home=True, last_n=20,
+        before_date=as_of_date, exclude_match_id=exclude_match_id
+    )
+    away_stats = compute_team_hsh_stats(
+        away_id, league_id, as_home=False, last_n=20,
+        before_date=as_of_date, exclude_match_id=exclude_match_id
+    )
 
     # Stats des 10 derniers (forme récente)
-    home_recent = compute_team_hsh_stats(home_id, league_id, as_home=True,  last_n=10)
-    away_recent = compute_team_hsh_stats(away_id, league_id, as_home=False, last_n=10)
+    home_recent = compute_team_hsh_stats(
+        home_id, league_id, as_home=True, last_n=10,
+        before_date=as_of_date, exclude_match_id=exclude_match_id
+    )
+    away_recent = compute_team_hsh_stats(
+        away_id, league_id, as_home=False, last_n=10,
+        before_date=as_of_date, exclude_match_id=exclude_match_id
+    )
 
     # Encodage du groupe de ligue
     group_enc = {"A": 0, "B": 1, "C": 2, "D": 3}.get(league_group, 3)

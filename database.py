@@ -318,7 +318,7 @@ def get_matches_for_training(league_group: str = None, min_matches: int = 50):
         if league_group:
             query += " AND l.league_group = %s"
             params.append(league_group)
-        query += " ORDER BY m.match_date DESC"
+        query += " ORDER BY m.match_date ASC"
         cur.execute(query, params)
         return cur.fetchall()
 

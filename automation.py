@@ -184,6 +184,7 @@ def _select_publication_candidates(target_day: date = None) -> list[dict[str, An
               AND m.match_date < %s
               AND m.match_date >= NOW()
               AND m.status NOT IN ('complete', 'completed')
+              AND l.league_group <> 'D'
               AND (
                     p.match_id IS NULL
                  OR p.updated_at IS NULL
@@ -326,6 +327,9 @@ def publish_prediction_for_match(match_id: int, bankroll: float = DEFAULT_BANKRO
     match = _load_match(match_id)
     if not match:
         raise ValueError(f"Match {match_id} introuvable.")
+
+    if match.get("league_group") == "D":
+        raise ValueError(f"Ligue hors périmètre publié pour match {match_id}.")
 
     prediction = build_prediction_record(match, bankroll=bankroll, user_context=user_context)
     save_prediction(prediction)

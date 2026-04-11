@@ -26,6 +26,51 @@ MODELS_DIR = "models"
 os.makedirs(MODELS_DIR, exist_ok=True)
 
 
+BOOTSTRAP_GROUP_RULES = {
+    "A": [
+        "premier league", "championship", "league one", "league two",
+        "bundesliga", "la liga", "segunda división", "segunda division",
+        "serie a", "ligue 1", "ligue 2", "eredivisie", "eerste divisie",
+        "liga nos", "ligapro", "pro league", "champions league",
+        "europa league", "europa conference league", "coppa italia",
+        "nations league", "russian premier league", "liga i", "liga ii",
+        "super cup",
+    ],
+    "B": [
+        "mls", "usl championship", "brasil", "brazil", "copa do brasil",
+        "argentina", "uruguay", "venezuela", "primera división",
+        "primera division",
+    ],
+    "C": [
+        "j1 league", "k league", "a-league", "saudi", "australia",
+        "japan", "south korea", "israeli", "liga leumit",
+    ],
+}
+
+BOOTSTRAP_COUNTRY_GROUPS = {
+    "england": "A",
+    "germany": "A",
+    "spain": "A",
+    "italy": "A",
+    "france": "A",
+    "netherlands": "A",
+    "portugal": "A",
+    "belgium": "A",
+    "romania": "A",
+    "russia": "A",
+    "usa": "B",
+    "brazil": "B",
+    "argentina": "B",
+    "uruguay": "B",
+    "venezuela": "B",
+    "japan": "C",
+    "south korea": "C",
+    "australia": "C",
+    "saudi arabia": "C",
+    "israel": "C",
+}
+
+
 # ── Clustering des ligues ────────────────────────────────────
 def assign_league_group(league_stats: dict) -> str:
     """
@@ -45,6 +90,18 @@ def assign_league_group(league_stats: dict) -> str:
         return "D"  # Insuffisant
 
 
+def bootstrap_league_group(league_name: str = "", country: str = "") -> str:
+    """Assigne un groupe par heuristique quand l'historique local est insuffisant."""
+    haystack = f"{country} {league_name}".lower().strip()
+
+    for group, patterns in BOOTSTRAP_GROUP_RULES.items():
+        if any(pattern in haystack for pattern in patterns):
+            return group
+
+    country_key = (country or "").strip().lower()
+    return BOOTSTRAP_COUNTRY_GROUPS.get(country_key, "D")
+
+
 def compute_league_profile(league_id: int) -> dict:
     """Calcule le profil statistique d'une ligue."""
     from database import get_conn
@@ -54,21 +111,39 @@ def compute_league_profile(league_id: int) -> dict:
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         cur.execute("""
             SELECT
+                l.name AS league_name,
+                l.country,
                 COUNT(*) as total,
                 AVG(hsh_goals_h1 + hsh_goals_h2) as avg_goals,
                 AVG(CASE WHEN hsh_result = 'H1' THEN 1.0 ELSE 0.0 END) as h1_pct,
                 AVG(CASE WHEN hsh_result = 'H2' THEN 1.0 ELSE 0.0 END) as h2_pct,
                 AVG(CASE WHEN hsh_result = 'EQ' THEN 1.0 ELSE 0.0 END) as eq_pct
-            FROM matches
-            WHERE league_id = %s AND has_ht_data = TRUE
+            FROM leagues l
+            LEFT JOIN matches m ON m.league_id = l.footystats_id
+                AND m.has_ht_data = TRUE
+                AND m.hsh_result IS NOT NULL
+            WHERE l.footystats_id = %s
+            GROUP BY l.name, l.country
         """, (league_id,))
         row = cur.fetchone()
 
-    if not row or row["total"] < MIN_MATCHES:
+    if not row:
         return {"group": "D", "total": 0}
 
+    total = int(row["total"] or 0)
+    fallback_group = bootstrap_league_group(row.get("league_name") or "", row.get("country") or "")
+    if total < MIN_MATCHES:
+        return {
+            "total": total,
+            "avg_goals": float(row["avg_goals"] or 0),
+            "h1_pct": float(row["h1_pct"] or 0),
+            "h2_pct": float(row["h2_pct"] or 0),
+            "eq_pct": float(row["eq_pct"] or 0),
+            "group": fallback_group,
+        }
+
     return {
-        "total":     row["total"],
+        "total":     total,
         "avg_goals": float(row["avg_goals"] or 0),
         "h1_pct":    float(row["h1_pct"] or 0),
         "h2_pct":    float(row["h2_pct"] or 0),

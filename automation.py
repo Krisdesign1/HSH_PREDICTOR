@@ -37,7 +37,13 @@ from database import (
 )
 from features import FEATURE_COLUMNS, build_match_features
 from llm import analyze_match, apply_llm_adjustments
-from model import compute_league_profile, load_model, update_all_league_groups
+from model import (
+    available_model_groups,
+    compute_league_profile,
+    has_model_for_group,
+    load_model,
+    update_all_league_groups,
+)
 from value_bet import full_value_analysis
 
 logger = logging.getLogger(__name__)
@@ -96,7 +102,7 @@ def _set_state(**kwargs: Any) -> None:
 
 
 def _predict_raw_probabilities(features: dict[str, Any], league_group: str) -> dict[str, float]:
-    model = load_model(league_group)
+    model = load_model(league_group, allow_fallback=False)
     X = np.array([[features.get(col, 0) for col in FEATURE_COLUMNS]])
 
     if hasattr(model, "calibrated_classifiers_") and model.calibrated_classifiers_:
@@ -115,7 +121,7 @@ def _predict_raw_probabilities(features: dict[str, Any], league_group: str) -> d
 
 
 def _predict_calibrated_probabilities(features: dict[str, Any], league_group: str) -> dict[str, float]:
-    model = load_model(league_group)
+    model = load_model(league_group, allow_fallback=False)
     X = np.array([[features.get(col, 0) for col in FEATURE_COLUMNS]])
     calibrated = model.predict_proba(X)[0]
     return {
@@ -155,6 +161,10 @@ def _tracked_league_names() -> set[str]:
     return {name.lower() for name in TRACKED_LEAGUES if name}
 
 
+def _publishable_model_groups() -> set[str]:
+    return available_model_groups()
+
+
 def sync_today_matches(target_day: date = None) -> dict[str, Any]:
     target_day = target_day or date.today()
     collector = FootyStatsCollector()
@@ -174,6 +184,10 @@ def sync_today_matches(target_day: date = None) -> dict[str, Any]:
 def _select_publication_candidates(target_day: date = None) -> list[dict[str, Any]]:
     target_day = target_day or date.today()
     day_start, day_end = _day_bounds(target_day)
+    publishable_groups = _publishable_model_groups()
+
+    if not publishable_groups:
+        return []
 
     with get_conn() as conn:
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
@@ -202,6 +216,7 @@ def _select_publication_candidates(target_day: date = None) -> list[dict[str, An
         rows = [dict(row) for row in cur.fetchall()]
 
     tracked_names = _tracked_league_names()
+    rows = [row for row in rows if row.get("league_group") in publishable_groups]
     if tracked_names:
         rows = [row for row in rows if (row.get("league_name") or "").lower() in tracked_names]
 
@@ -212,6 +227,7 @@ def _cleanup_out_of_scope_predictions(target_day: date = None) -> dict[str, Any]
     target_day = target_day or date.today()
     day_start, day_end = _day_bounds(target_day)
     tracked_names = list(_tracked_league_names())
+    publishable_groups = list(_publishable_model_groups())
 
     query = """
         DELETE FROM predictions p
@@ -225,8 +241,14 @@ def _cleanup_out_of_scope_predictions(target_day: date = None) -> dict[str, Any]
     """
     params: list[Any] = [day_start, day_end]
 
+    if publishable_groups:
+        query += " OR NOT (l.league_group = ANY(%s))"
+        params.append(publishable_groups)
+    else:
+        query += " OR TRUE"
+
     if tracked_names:
-        query += " OR LOWER(l.name) <> ALL(%s)"
+        query += " OR NOT (LOWER(l.name) = ANY(%s))"
         params.append(tracked_names)
 
     query += ")"
@@ -371,6 +393,8 @@ def publish_prediction_for_match(match_id: int, bankroll: float = DEFAULT_BANKRO
 
     if match.get("league_group") == "D":
         raise ValueError(f"Ligue hors périmètre publié pour match {match_id}.")
+    if not has_model_for_group(match.get("league_group") or ""):
+        raise ValueError(f"Aucun modèle dédié disponible pour le groupe {match.get('league_group')}.")
     tracked_names = _tracked_league_names()
     if tracked_names and (match.get("league_name") or "").lower() not in tracked_names:
         raise ValueError(f"Ligue non suivie pour match {match_id}.")
@@ -431,6 +455,7 @@ def run_automation_cycle(trigger_source: str = "scheduler", target_day: date = N
             "target_day": target_day.isoformat(),
             "sync": sync_report,
             "league_groups": grouping_report,
+            "model_groups_available": sorted(_publishable_model_groups()),
             "cleanup": cleanup_report,
             "publication": publication_report,
             "settlement": settlement_report,
@@ -532,5 +557,6 @@ def scheduler_snapshot() -> dict[str, Any]:
         "interval_seconds": AUTOMATION_INTERVAL_SECONDS,
         "lookahead_days": AUTOMATION_LOOKAHEAD_DAYS,
         "tracked_leagues": TRACKED_LEAGUES,
+        "available_model_groups": sorted(_publishable_model_groups()),
         "recent_runs": _serialize(runs),
     }

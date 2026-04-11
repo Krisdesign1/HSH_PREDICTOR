@@ -251,7 +251,9 @@ def health() -> dict[str, Any]:
             "scheduler": {
                 "enabled": False,
                 "running": False,
+                "available_model_groups": [],
             },
+            "available_model_groups": [],
             "startup": STARTUP_STATE,
             "error": str(exc),
         }
@@ -261,6 +263,7 @@ def health() -> dict[str, Any]:
         "database": True,
         "match_count": match_count,
         "scheduler": scheduler,
+        "available_model_groups": scheduler.get("available_model_groups", []),
         "startup": STARTUP_STATE,
     }
 

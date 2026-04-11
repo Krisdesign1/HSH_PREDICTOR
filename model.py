@@ -71,6 +71,18 @@ BOOTSTRAP_COUNTRY_GROUPS = {
 }
 
 
+def model_path_for_group(league_group: str) -> str:
+    return os.path.join(MODELS_DIR, f"model_group_{league_group}.joblib")
+
+
+def has_model_for_group(league_group: str) -> bool:
+    return os.path.exists(model_path_for_group(league_group))
+
+
+def available_model_groups() -> set[str]:
+    return {group for group in ("A", "B", "C") if has_model_for_group(group)}
+
+
 # ── Clustering des ligues ────────────────────────────────────
 def assign_league_group(league_stats: dict) -> str:
     """
@@ -245,7 +257,7 @@ def train_model(league_group: str) -> dict:
     logger.info(f"\n{classification_report(y_test, y_pred, target_names=['H1','H2','EQ'])}")
 
     # 8. Sauvegarder le modèle
-    model_path = os.path.join(MODELS_DIR, f"model_group_{league_group}.joblib")
+    model_path = model_path_for_group(league_group)
     joblib.dump(calibrated, model_path)
     logger.info(f"   💾 Modèle sauvegardé : {model_path}")
 
@@ -270,12 +282,14 @@ def train_all_models() -> list:
 
 
 # ── Prédiction ───────────────────────────────────────────────
-def load_model(league_group: str):
+def load_model(league_group: str, allow_fallback: bool = True):
     """Charge le modèle calibré pour un groupe."""
-    model_path = os.path.join(MODELS_DIR, f"model_group_{league_group}.joblib")
+    model_path = model_path_for_group(league_group)
     if not os.path.exists(model_path):
+        if not allow_fallback:
+            raise FileNotFoundError(f"Modèle groupe {league_group} introuvable.")
         logger.warning(f"⚠️  Modèle groupe {league_group} non trouvé — fallback groupe A")
-        model_path = os.path.join(MODELS_DIR, "model_group_A.joblib")
+        model_path = model_path_for_group("A")
     return joblib.load(model_path)
 
 

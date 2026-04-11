@@ -26,6 +26,8 @@ from config import (
     COTES,
     DEFAULT_BANKROLL,
     LEAGUE_GROUPS,
+    PUBLICATION_ALLOWED_COUNTRIES,
+    PUBLICATION_ALLOWED_LEAGUES,
     TRACKED_LEAGUES,
 )
 from database import (
@@ -161,6 +163,32 @@ def _tracked_league_names() -> set[str]:
     return {name.lower() for name in TRACKED_LEAGUES if name}
 
 
+def _normalized_publication_scope() -> dict[str, set[str]]:
+    return {
+        "league_names": {name.lower() for name in PUBLICATION_ALLOWED_LEAGUES if name},
+        "countries": {name.lower() for name in PUBLICATION_ALLOWED_COUNTRIES if name},
+    }
+
+
+def _publication_scope_snapshot() -> dict[str, list[str]]:
+    scope = _normalized_publication_scope()
+    return {
+        "league_names": sorted(scope["league_names"]),
+        "countries": sorted(scope["countries"]),
+    }
+
+
+def _match_in_publication_scope(match: dict[str, Any]) -> bool:
+    scope = _normalized_publication_scope()
+    if scope["league_names"]:
+        if (match.get("league_name") or "").strip().lower() not in scope["league_names"]:
+            return False
+    if scope["countries"]:
+        if (match.get("country") or "").strip().lower() not in scope["countries"]:
+            return False
+    return True
+
+
 def _publishable_model_groups() -> set[str]:
     return available_model_groups()
 
@@ -219,6 +247,7 @@ def _select_publication_candidates(target_day: date = None) -> list[dict[str, An
     rows = [row for row in rows if row.get("league_group") in publishable_groups]
     if tracked_names:
         rows = [row for row in rows if (row.get("league_name") or "").lower() in tracked_names]
+    rows = [row for row in rows if _match_in_publication_scope(row)]
 
     return rows
 
@@ -228,6 +257,7 @@ def _cleanup_out_of_scope_predictions(target_day: date = None) -> dict[str, Any]
     day_start, day_end = _day_bounds(target_day)
     tracked_names = list(_tracked_league_names())
     publishable_groups = list(_publishable_model_groups())
+    publication_scope = _publication_scope_snapshot()
 
     query = """
         DELETE FROM predictions p
@@ -250,6 +280,14 @@ def _cleanup_out_of_scope_predictions(target_day: date = None) -> dict[str, Any]
     if tracked_names:
         query += " OR NOT (LOWER(l.name) = ANY(%s))"
         params.append(tracked_names)
+
+    if publication_scope["league_names"]:
+        query += " OR NOT (LOWER(l.name) = ANY(%s))"
+        params.append(publication_scope["league_names"])
+
+    if publication_scope["countries"]:
+        query += " OR NOT (LOWER(l.country) = ANY(%s))"
+        params.append(publication_scope["countries"])
 
     query += ")"
 
@@ -398,6 +436,8 @@ def publish_prediction_for_match(match_id: int, bankroll: float = DEFAULT_BANKRO
     tracked_names = _tracked_league_names()
     if tracked_names and (match.get("league_name") or "").lower() not in tracked_names:
         raise ValueError(f"Ligue non suivie pour match {match_id}.")
+    if not _match_in_publication_scope(match):
+        raise ValueError(f"Match {match_id} hors scope de publication validé.")
 
     prediction = build_prediction_record(match, bankroll=bankroll, user_context=user_context)
     save_prediction(prediction)
@@ -456,6 +496,7 @@ def run_automation_cycle(trigger_source: str = "scheduler", target_day: date = N
             "sync": sync_report,
             "league_groups": grouping_report,
             "model_groups_available": sorted(_publishable_model_groups()),
+            "publication_scope": _publication_scope_snapshot(),
             "cleanup": cleanup_report,
             "publication": publication_report,
             "settlement": settlement_report,
@@ -557,6 +598,7 @@ def scheduler_snapshot() -> dict[str, Any]:
         "interval_seconds": AUTOMATION_INTERVAL_SECONDS,
         "lookahead_days": AUTOMATION_LOOKAHEAD_DAYS,
         "tracked_leagues": TRACKED_LEAGUES,
+        "publication_scope": _publication_scope_snapshot(),
         "available_model_groups": sorted(_publishable_model_groups()),
         "recent_runs": _serialize(runs),
     }

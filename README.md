@@ -43,6 +43,8 @@ Variables importantes :
 - `AUTOMATION_ENABLED` : active le scheduler embarqué.
 - `AUTOMATION_INTERVAL_SECONDS` : fréquence de recalcul.
 - `TRACKED_LEAGUES` : filtre optionnel, liste séparée par virgules.
+- `PUBLICATION_ALLOWED_LEAGUES` : filtre dur de publication par nom de ligue.
+- `PUBLICATION_ALLOWED_COUNTRIES` : filtre dur de publication par pays.
 
 ## Démarrage local
 
@@ -101,6 +103,8 @@ AUTOMATION_TRIGGER_ON_START=true
 AUTOMATION_INTERVAL_SECONDS=1800
 AUTOMATION_LOOKAHEAD_DAYS=0
 AUTOMATION_MAX_LEAGUES=0
+PUBLICATION_ALLOWED_LEAGUES=
+PUBLICATION_ALLOWED_COUNTRIES=
 DEFAULT_BANKROLL=1000
 ```
 

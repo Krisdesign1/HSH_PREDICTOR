@@ -16,6 +16,11 @@ def _env_bool(name: str, default: bool) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _env_csv(name: str) -> list[str]:
+    raw = os.getenv(name, "")
+    return [item.strip() for item in raw.split(",") if item.strip()]
+
+
 # ── API Keys ─────────────────────────────────────────────────
 FOOTYSTATS_API_KEY = os.getenv("FOOTYSTATS_API_KEY", "")
 ANTHROPIC_API_KEY  = os.getenv("ANTHROPIC_API_KEY", "")
@@ -90,6 +95,6 @@ AUTOMATION_INTERVAL_SECONDS = int(os.getenv("AUTOMATION_INTERVAL_SECONDS", "1800
 AUTOMATION_LOOKAHEAD_DAYS = int(os.getenv("AUTOMATION_LOOKAHEAD_DAYS", "0"))
 AUTOMATION_MAX_LEAGUES = int(os.getenv("AUTOMATION_MAX_LEAGUES", "0"))
 AUTOMATION_CONTEXT = os.getenv("AUTOMATION_CONTEXT", "")
-TRACKED_LEAGUES = [
-    item.strip() for item in os.getenv("TRACKED_LEAGUES", "").split(",") if item.strip()
-]
+TRACKED_LEAGUES = _env_csv("TRACKED_LEAGUES")
+PUBLICATION_ALLOWED_LEAGUES = _env_csv("PUBLICATION_ALLOWED_LEAGUES")
+PUBLICATION_ALLOWED_COUNTRIES = _env_csv("PUBLICATION_ALLOWED_COUNTRIES")

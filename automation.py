@@ -151,6 +151,10 @@ def _tracked_leagues(leagues: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return filtered
 
 
+def _tracked_league_names() -> set[str]:
+    return {name.lower() for name in TRACKED_LEAGUES if name}
+
+
 def sync_today_matches(target_day: date = None) -> dict[str, Any]:
     target_day = target_day or date.today()
     collector = FootyStatsCollector()
@@ -195,7 +199,44 @@ def _select_publication_candidates(target_day: date = None) -> list[dict[str, An
             """,
             (day_start, day_end),
         )
-        return [dict(row) for row in cur.fetchall()]
+        rows = [dict(row) for row in cur.fetchall()]
+
+    tracked_names = _tracked_league_names()
+    if tracked_names:
+        rows = [row for row in rows if (row.get("league_name") or "").lower() in tracked_names]
+
+    return rows
+
+
+def _cleanup_out_of_scope_predictions(target_day: date = None) -> dict[str, Any]:
+    target_day = target_day or date.today()
+    day_start, day_end = _day_bounds(target_day)
+    tracked_names = list(_tracked_league_names())
+
+    query = """
+        DELETE FROM predictions p
+        USING matches m, leagues l
+        WHERE p.match_id = m.footystats_id
+          AND m.league_id = l.footystats_id
+          AND m.match_date >= %s
+          AND m.match_date < %s
+          AND (
+                l.league_group = 'D'
+    """
+    params: list[Any] = [day_start, day_end]
+
+    if tracked_names:
+        query += " OR LOWER(l.name) <> ALL(%s)"
+        params.append(tracked_names)
+
+    query += ")"
+
+    with get_conn() as conn:
+        cur = conn.cursor()
+        cur.execute(query, params)
+        deleted = cur.rowcount
+
+    return {"removed_predictions": deleted}
 
 
 def _settle_completed_predictions() -> dict[str, Any]:
@@ -330,6 +371,9 @@ def publish_prediction_for_match(match_id: int, bankroll: float = DEFAULT_BANKRO
 
     if match.get("league_group") == "D":
         raise ValueError(f"Ligue hors périmètre publié pour match {match_id}.")
+    tracked_names = _tracked_league_names()
+    if tracked_names and (match.get("league_name") or "").lower() not in tracked_names:
+        raise ValueError(f"Ligue non suivie pour match {match_id}.")
 
     prediction = build_prediction_record(match, bankroll=bankroll, user_context=user_context)
     save_prediction(prediction)
@@ -378,6 +422,7 @@ def run_automation_cycle(trigger_source: str = "scheduler", target_day: date = N
         init_db()
         sync_report = sync_today_matches(target_day)
         grouping_report = update_all_league_groups()
+        cleanup_report = _cleanup_out_of_scope_predictions(target_day)
         publication_report = publish_predictions_for_today(target_day, bankroll=DEFAULT_BANKROLL, user_context=AUTOMATION_CONTEXT)
         settlement_report = _settle_completed_predictions()
 
@@ -386,6 +431,7 @@ def run_automation_cycle(trigger_source: str = "scheduler", target_day: date = N
             "target_day": target_day.isoformat(),
             "sync": sync_report,
             "league_groups": grouping_report,
+            "cleanup": cleanup_report,
             "publication": publication_report,
             "settlement": settlement_report,
         }

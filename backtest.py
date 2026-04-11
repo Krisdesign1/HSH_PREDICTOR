@@ -6,6 +6,7 @@ import logging
 from datetime import datetime, timedelta
 from config import (
     COTES,
+    TEMPORAL_MIN_SUBGROUP_ROWS,
     TEMPORAL_PROTOCOL_MODE,
     TEMPORAL_TRAIN_DAYS,
     TEMPORAL_VALID_DAYS,
@@ -321,6 +322,48 @@ def run_temporal_backtest(
     return report
 
 
+def run_temporal_subgroup_analysis(
+    group_by: str = "league_name",
+    league_group: str = None,
+    min_rows: int = TEMPORAL_MIN_SUBGROUP_ROWS,
+    limit: int = 10,
+    protocol_mode: str = TEMPORAL_PROTOCOL_MODE,
+    train_days: int = TEMPORAL_TRAIN_DAYS,
+    valid_days: int = TEMPORAL_VALID_DAYS,
+    test_days: int = TEMPORAL_TEST_DAYS,
+    step_days: int = TEMPORAL_STEP_DAYS,
+    train_matches: int = TEMPORAL_TRAIN_MATCHES,
+    valid_matches: int = TEMPORAL_VALID_MATCHES,
+    test_matches: int = TEMPORAL_TEST_MATCHES,
+    step_matches: int = TEMPORAL_STEP_MATCHES,
+) -> dict:
+    from model import walk_forward_temporal_subgroup_evaluation
+
+    if min_rows is None:
+        min_rows = TEMPORAL_MIN_SUBGROUP_ROWS
+
+    report = walk_forward_temporal_subgroup_evaluation(
+        group_by=group_by,
+        league_group=league_group,
+        min_rows=min_rows,
+        protocol_mode=protocol_mode,
+        train_days=train_days,
+        valid_days=valid_days,
+        test_days=test_days,
+        step_days=step_days,
+        train_matches=train_matches,
+        valid_matches=valid_matches,
+        test_matches=test_matches,
+        step_matches=step_matches,
+    )
+    if report.get("status") != "ok":
+        logger.warning("⚠️  Analyse temporelle par sous-groupe impossible : %s", report)
+        return report
+
+    _print_temporal_subgroup_report(report, limit=limit)
+    return report
+
+
 def _print_backtest_report(report: dict):
     """Affiche un résumé lisible du backtest."""
     sep = "─" * 50
@@ -385,6 +428,40 @@ def _print_temporal_backtest_report(report: dict):
     print(f"  Profit net    : {sim['total_profit']:+.2f}$")
     print(f"  Bankroll fin  : {sim['final_bankroll']:.2f}$")
     print(f"{'═'*50}\n")
+
+
+def _print_temporal_subgroup_report(report: dict, limit: int = 10):
+    """Résumé lisible d'une comparaison temporelle par sous-groupe."""
+    sep = "─" * 88
+    group_by = report["group_by"]
+    results = report["results"][: max(limit, 1)]
+
+    print(f"\n{'═'*88}")
+    print(f"  COMPARAISON TEMPORELLE PAR {group_by.upper()}")
+    print(f"{'═'*88}")
+    print(
+        f"  Groupes évalués : {report['evaluated_group_count']} / {report['source_group_count']} "
+        f"(min_rows={report['min_rows']})"
+    )
+    print(f"  Rapport         : {report['report_path']}")
+    print(sep)
+    print("  Sous-groupe".ljust(34) + "Rows".rjust(6) + "  Acc".rjust(8) + "  LogLoss".rjust(11) + "  Brier".rjust(9) + "  Folds".rjust(8))
+    print(sep)
+    for item in results:
+        metrics = item["aggregate_metrics"]
+        label = str(item.get(group_by, ""))[:34]
+        acc_label = f"{metrics['accuracy']:.1%}"
+        logloss_label = f"{metrics['log_loss']:.4f}"
+        brier_label = f"{metrics['brier_score']:.4f}"
+        print(
+            f"  {label.ljust(34)}"
+            f"{str(metrics['rows']).rjust(6)}"
+            f"{acc_label.rjust(8)}"
+            f"{logloss_label.rjust(11)}"
+            f"{brier_label.rjust(9)}"
+            f"{str(item['folds_run']).rjust(8)}"
+        )
+    print(f"{'═'*88}\n")
 
 
 def run_all_backtests(days_back: int = 90, bankroll: float = 1000.0) -> dict:

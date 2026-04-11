@@ -30,6 +30,7 @@ from config import (
     TEMPORAL_VALID_MATCHES,
     TEMPORAL_TEST_MATCHES,
     TEMPORAL_STEP_MATCHES,
+    TEMPORAL_MIN_SUBGROUP_ROWS,
     TEMPORAL_MAX_GAP_DAYS,
     TEMPORAL_SEGMENT_MODE,
     TEMPORAL_SEGMENT_SELECTION,
@@ -484,6 +485,9 @@ def build_temporal_dataset_from_matches(matches: list[dict] | list, league_group
                 "match_date": pd.Timestamp(match_date),
                 "league_group": match_dict.get("league_group"),
                 "league_id": match_dict.get("league_id"),
+                "league_name": match_dict.get("league_name"),
+                "country": match_dict.get("country"),
+                "season": match_dict.get("season"),
             }
         )
         rows.append(row)
@@ -596,6 +600,76 @@ def _evaluate_estimator(estimator, df: pd.DataFrame, feature_columns: list[str])
     }
 
 
+def _summarize_prediction_subset(df: pd.DataFrame) -> dict:
+    labels = [0, 1, 2]
+    y_true = df["actual_result"].map(LABEL_ENCODER).values
+    y_pred = df["predicted_result"].map(LABEL_ENCODER).values
+    y_proba = df[["prob_h1", "prob_h2", "prob_eq"]].values
+    y_one_hot = np.eye(len(labels))[y_true]
+
+    return {
+        "rows": int(len(df)),
+        "accuracy": round(float(accuracy_score(y_true, y_pred)), 4),
+        "log_loss": round(float(log_loss(y_true, y_proba, labels=labels)), 4),
+        "brier_score": round(float(np.mean(np.sum((y_proba - y_one_hot) ** 2, axis=1))), 4),
+        "label_distribution": _label_distribution(y_true),
+    }
+
+
+def _aggregate_prediction_breakdown(
+    pred_df: pd.DataFrame,
+    field: str,
+    min_rows: int = TEMPORAL_MIN_SUBGROUP_ROWS,
+) -> list[dict]:
+    if pred_df.empty or field not in pred_df.columns:
+        return []
+
+    breakdown = []
+    for value, subset in pred_df.groupby(field, dropna=True):
+        if pd.isna(value) or len(subset) < min_rows:
+            continue
+        metrics = _summarize_prediction_subset(subset)
+        metrics[field] = value
+        breakdown.append(metrics)
+
+    breakdown.sort(key=lambda item: (-item["rows"], item.get(field)))
+    return breakdown
+
+
+def _build_temporal_protocol_payload(
+    protocol_mode: str,
+    train_days: int,
+    valid_days: int,
+    test_days: int,
+    step_days: int,
+    train_matches: int,
+    valid_matches: int,
+    test_matches: int,
+    step_matches: int,
+    segment_mode: str,
+    selection_strategy: str,
+) -> dict:
+    return {
+        "protocol_mode": protocol_mode,
+        "train_days": train_days,
+        "valid_days": valid_days,
+        "test_days": test_days,
+        "step_days": step_days,
+        "train_matches": train_matches,
+        "valid_matches": valid_matches,
+        "test_matches": test_matches,
+        "step_matches": step_matches,
+        "segment_mode": segment_mode,
+        "selection_strategy": selection_strategy,
+    }
+
+
+def _safe_report_token(value: str) -> str:
+    token = "".join(ch.lower() if ch.isalnum() else "_" for ch in str(value or "").strip())
+    token = "_".join(part for part in token.split("_") if part)
+    return token or "unknown"
+
+
 def _fit_temporal_estimator(
     train_df: pd.DataFrame,
     valid_df: pd.DataFrame,
@@ -687,7 +761,7 @@ def train_temporal_model(
         }
 
     coverage = segment_meta["coverage"]
-    df = build_temporal_dataset_from_matches(usable_matches, league_group=league_group)
+    df = build_temporal_dataset_from_matches(usable_matches)
 
     train_df, valid_df, test_df = split_temporal_dataset(
         df,
@@ -828,6 +902,40 @@ def walk_forward_temporal_evaluation(
 
     scope = f"group_{league_group}" if league_group else "global"
     matches = get_matches_for_training(league_group)
+    return _walk_forward_temporal_evaluation_from_matches(
+        matches,
+        scope=scope,
+        report_path=temporal_report_path(league_group, "walk_forward"),
+        protocol_mode=protocol_mode,
+        train_days=train_days,
+        valid_days=valid_days,
+        test_days=test_days,
+        step_days=step_days,
+        train_matches=train_matches,
+        valid_matches=valid_matches,
+        test_matches=test_matches,
+        step_matches=step_matches,
+        segment_mode=segment_mode,
+        selection_strategy=selection_strategy,
+    )
+
+
+def _walk_forward_temporal_evaluation_from_matches(
+    matches: list[dict] | list,
+    scope: str,
+    report_path: str | None = None,
+    protocol_mode: str = TEMPORAL_PROTOCOL_MODE,
+    train_days: int = TEMPORAL_TRAIN_DAYS,
+    valid_days: int = TEMPORAL_VALID_DAYS,
+    test_days: int = TEMPORAL_TEST_DAYS,
+    step_days: int = TEMPORAL_STEP_DAYS,
+    train_matches: int = TEMPORAL_TRAIN_MATCHES,
+    valid_matches: int = TEMPORAL_VALID_MATCHES,
+    test_matches: int = TEMPORAL_TEST_MATCHES,
+    step_matches: int = TEMPORAL_STEP_MATCHES,
+    segment_mode: str = TEMPORAL_SEGMENT_MODE,
+    selection_strategy: str = TEMPORAL_SEGMENT_SELECTION,
+) -> dict:
     source_rows = len(matches)
     if source_rows < MIN_MATCHES:
         return {"status": "insufficient_data", "scope": scope, "rows": source_rows}
@@ -857,7 +965,7 @@ def walk_forward_temporal_evaluation(
         }
 
     coverage = segment_meta["coverage"]
-    df = build_temporal_dataset_from_matches(usable_matches, league_group=league_group)
+    df = build_temporal_dataset_from_matches(usable_matches)
 
     folds = []
     predictions = []
@@ -908,6 +1016,9 @@ def walk_forward_temporal_evaluation(
                     "match_id": row.get("match_id"),
                     "match_date": pd.Timestamp(row["match_date"]).isoformat(),
                     "league_group": row.get("league_group"),
+                    "league_name": row.get("league_name"),
+                    "country": row.get("country"),
+                    "season": row.get("season"),
                     "actual_result": labels[int(y_true)],
                     "predicted_result": labels[int(y_pred)],
                     "prob_h1": float(probs[0]),
@@ -937,6 +1048,12 @@ def walk_forward_temporal_evaluation(
         "brier_score": round(float(np.mean(np.sum((y_proba - y_one_hot) ** 2, axis=1))), 4),
         "label_distribution": _label_distribution(y_true),
     }
+    breakdowns = {
+        "league_name": _aggregate_prediction_breakdown(pred_df, "league_name"),
+        "country": _aggregate_prediction_breakdown(pred_df, "country"),
+        "league_group": _aggregate_prediction_breakdown(pred_df, "league_group", min_rows=10),
+        "season": _aggregate_prediction_breakdown(pred_df, "season"),
+    }
 
     report = {
         "status": "ok",
@@ -944,27 +1061,169 @@ def walk_forward_temporal_evaluation(
         "generated_at": _utc_now(),
         "segment": segment_meta,
         "coverage": coverage,
-        "protocol": {
-            "protocol_mode": protocol_mode,
-            "train_days": train_days,
-            "valid_days": valid_days,
-            "test_days": test_days,
-            "step_days": step_days,
-            "train_matches": train_matches,
-            "valid_matches": valid_matches,
-            "test_matches": test_matches,
-            "step_matches": step_matches,
-            "segment_mode": segment_mode,
-            "selection_strategy": selection_strategy,
-        },
+        "protocol": _build_temporal_protocol_payload(
+            protocol_mode=protocol_mode,
+            train_days=train_days,
+            valid_days=valid_days,
+            test_days=test_days,
+            step_days=step_days,
+            train_matches=train_matches,
+            valid_matches=valid_matches,
+            test_matches=test_matches,
+            step_matches=step_matches,
+            segment_mode=segment_mode,
+            selection_strategy=selection_strategy,
+        ),
         "folds_run": len(folds),
         "folds_skipped": skipped,
         "aggregate_metrics": aggregate,
+        "breakdowns": breakdowns,
         "fold_metrics": folds,
         "predictions": predictions,
-        "report_path": temporal_report_path(league_group, "walk_forward"),
+        "report_path": report_path,
     }
-    _write_report(report["report_path"], report)
+    if report_path:
+        _write_report(report_path, report)
+    return report
+
+
+def walk_forward_temporal_subgroup_evaluation(
+    group_by: str = "league_name",
+    league_group: str = None,
+    min_rows: int = TEMPORAL_MIN_SUBGROUP_ROWS,
+    protocol_mode: str = TEMPORAL_PROTOCOL_MODE,
+    train_days: int = TEMPORAL_TRAIN_DAYS,
+    valid_days: int = TEMPORAL_VALID_DAYS,
+    test_days: int = TEMPORAL_TEST_DAYS,
+    step_days: int = TEMPORAL_STEP_DAYS,
+    train_matches: int = TEMPORAL_TRAIN_MATCHES,
+    valid_matches: int = TEMPORAL_VALID_MATCHES,
+    test_matches: int = TEMPORAL_TEST_MATCHES,
+    step_matches: int = TEMPORAL_STEP_MATCHES,
+    segment_mode: str = TEMPORAL_SEGMENT_MODE,
+    selection_strategy: str = TEMPORAL_SEGMENT_SELECTION,
+) -> dict:
+    from database import get_matches_for_training
+
+    allowed_fields = {"league_name", "country", "league_group", "season"}
+    if group_by not in allowed_fields:
+        return {
+            "status": "invalid_group_by",
+            "group_by": group_by,
+            "allowed_fields": sorted(allowed_fields),
+        }
+
+    if min_rows is None:
+        min_rows = TEMPORAL_MIN_SUBGROUP_ROWS
+
+    matches = get_matches_for_training(league_group)
+    grouped_matches: dict[str, list[dict]] = {}
+    for match in matches:
+        match_dict = dict(match)
+        group_value = str(match_dict.get(group_by) or "").strip()
+        if not group_value:
+            continue
+        grouped_matches.setdefault(group_value, []).append(match_dict)
+
+    protocol = _build_temporal_protocol_payload(
+        protocol_mode=protocol_mode,
+        train_days=train_days,
+        valid_days=valid_days,
+        test_days=test_days,
+        step_days=step_days,
+        train_matches=train_matches,
+        valid_matches=valid_matches,
+        test_matches=test_matches,
+        step_matches=step_matches,
+        segment_mode=segment_mode,
+        selection_strategy=selection_strategy,
+    )
+    report_path = os.path.join(REPORTS_DIR, f"walk_forward_subgroups_by_{_safe_report_token(group_by)}.json")
+
+    results = []
+    skipped = []
+    ordered_groups = sorted(grouped_matches.items(), key=lambda item: (-len(item[1]), item[0]))
+    for group_value, subgroup_matches in ordered_groups:
+        if len(subgroup_matches) < min_rows:
+            skipped.append(
+                {
+                    group_by: group_value,
+                    "rows": len(subgroup_matches),
+                    "status": "insufficient_rows",
+                    "reason": f"rows<{min_rows}",
+                }
+            )
+            continue
+
+        subgroup_scope = f"{group_by}:{group_value}"
+        subgroup_report = _walk_forward_temporal_evaluation_from_matches(
+            subgroup_matches,
+            scope=subgroup_scope,
+            report_path=None,
+            protocol_mode=protocol_mode,
+            train_days=train_days,
+            valid_days=valid_days,
+            test_days=test_days,
+            step_days=step_days,
+            train_matches=train_matches,
+            valid_matches=valid_matches,
+            test_matches=test_matches,
+            step_matches=step_matches,
+            segment_mode=segment_mode,
+            selection_strategy=selection_strategy,
+        )
+
+        if subgroup_report.get("status") != "ok":
+            skipped.append(
+                {
+                    group_by: group_value,
+                    "rows": len(subgroup_matches),
+                    "status": subgroup_report.get("status"),
+                    "reason": subgroup_report.get("error"),
+                    "coverage": subgroup_report.get("coverage"),
+                }
+            )
+            continue
+
+        metrics = dict(subgroup_report["aggregate_metrics"])
+        results.append(
+            {
+                group_by: group_value,
+                "source_rows": len(subgroup_matches),
+                "folds_run": subgroup_report["folds_run"],
+                "folds_skipped": len(subgroup_report.get("folds_skipped", [])),
+                "coverage": subgroup_report["coverage"],
+                "segment": subgroup_report["segment"],
+                "aggregate_metrics": metrics,
+            }
+        )
+
+    results.sort(
+        key=lambda item: (
+            item["aggregate_metrics"]["log_loss"],
+            -item["aggregate_metrics"]["accuracy"],
+            -item["aggregate_metrics"]["rows"],
+            str(item.get(group_by)),
+        )
+    )
+
+    report = {
+        "status": "ok" if results else "no_evaluable_groups",
+        "scope": f"subgroups_by_{group_by}",
+        "generated_at": _utc_now(),
+        "group_by": group_by,
+        "league_group_filter": league_group,
+        "min_rows": min_rows,
+        "protocol": protocol,
+        "source_match_count": len(matches),
+        "source_group_count": len(grouped_matches),
+        "evaluated_group_count": len(results),
+        "skipped_group_count": len(skipped),
+        "results": results,
+        "skipped_groups": skipped,
+        "report_path": report_path,
+    }
+    _write_report(report_path, report)
     return report
 
 

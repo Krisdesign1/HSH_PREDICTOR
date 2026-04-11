@@ -181,9 +181,34 @@ def cmd_predict(args):
 
 def cmd_backtest(args):
     """Lance le backtesting."""
-    from backtest import run_backtest, run_all_backtests, run_temporal_backtest
+    from backtest import (
+        run_backtest,
+        run_all_backtests,
+        run_temporal_backtest,
+        run_temporal_subgroup_analysis,
+    )
 
     if args.temporal:
+        if args.group_by:
+            report = run_temporal_subgroup_analysis(
+                group_by=args.group_by,
+                league_group=args.group,
+                min_rows=args.min_subgroup_rows,
+                limit=args.report_limit,
+                protocol_mode=args.protocol_mode,
+                train_days=args.train_days,
+                valid_days=args.valid_days,
+                test_days=args.test_days,
+                step_days=args.step_days,
+                train_matches=args.train_matches,
+                valid_matches=args.valid_matches,
+                test_matches=args.test_matches,
+                step_matches=args.step_matches,
+            )
+            if report.get("status") != "ok":
+                print(f"⚠️  Analyse temporelle par sous-groupe impossible : {report}")
+            return
+
         temporal_kwargs = {"league_group": args.group, "bankroll": args.bankroll}
         for key in (
             "protocol_mode",
@@ -290,6 +315,9 @@ def main():
     p_back.add_argument("--valid-matches", type=int, default=None, help="Fenêtre validation en nombre de matchs")
     p_back.add_argument("--test-matches", type=int, default=None, help="Fenêtre test en nombre de matchs")
     p_back.add_argument("--step-matches", type=int, default=None, help="Pas entre les folds en nombre de matchs")
+    p_back.add_argument("--group-by", type=str, choices=["league_name", "country", "league_group", "season"], default=None, help="Comparer les performances par sous-groupe")
+    p_back.add_argument("--min-subgroup-rows", type=int, default=None, help="Minimum de matchs source par sous-groupe")
+    p_back.add_argument("--report-limit", type=int, default=10, help="Nombre de sous-groupes à afficher")
 
     # ── serve ────────────────────────────────────────────────
     p_serve = sub.add_parser("serve", help="Lancer l'application web")

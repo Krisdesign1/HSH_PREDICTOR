@@ -308,7 +308,7 @@ def get_matches_for_training(league_group: str = None, min_matches: int = 50):
     with get_conn() as conn:
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         query = """
-            SELECT m.*, l.league_group
+            SELECT m.*, l.league_group, l.name AS league_name, l.country
             FROM matches m
             JOIN leagues l ON m.league_id = l.footystats_id
             WHERE m.has_ht_data = TRUE

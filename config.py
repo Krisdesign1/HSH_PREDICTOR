@@ -48,6 +48,21 @@ TEST_SIZE        = 0.2
 MIN_MATCHES      = 50       # Minimum matchs pour entraîner un modèle
 KELLY_FRACTION   = 0.25     # Kelly 1/4 (sécurisé)
 MIN_DATA_QUALITY = 0.80     # 80% minimum de matchs avec HT score
+MIN_CLASS_COUNT  = int(os.getenv("MIN_CLASS_COUNT", "8"))
+
+# ── Validation temporelle ────────────────────────────────────
+TEMPORAL_PROTOCOL_MODE = os.getenv("TEMPORAL_PROTOCOL_MODE", "days").strip().lower()
+TEMPORAL_TRAIN_DAYS = int(os.getenv("TEMPORAL_TRAIN_DAYS", "365"))
+TEMPORAL_VALID_DAYS = int(os.getenv("TEMPORAL_VALID_DAYS", "60"))
+TEMPORAL_TEST_DAYS  = int(os.getenv("TEMPORAL_TEST_DAYS", "30"))
+TEMPORAL_STEP_DAYS  = int(os.getenv("TEMPORAL_STEP_DAYS", "30"))
+TEMPORAL_TRAIN_MATCHES = int(os.getenv("TEMPORAL_TRAIN_MATCHES", "160"))
+TEMPORAL_VALID_MATCHES = int(os.getenv("TEMPORAL_VALID_MATCHES", "40"))
+TEMPORAL_TEST_MATCHES  = int(os.getenv("TEMPORAL_TEST_MATCHES", "20"))
+TEMPORAL_STEP_MATCHES  = int(os.getenv("TEMPORAL_STEP_MATCHES", "20"))
+TEMPORAL_MAX_GAP_DAYS = int(os.getenv("TEMPORAL_MAX_GAP_DAYS", "21"))
+TEMPORAL_SEGMENT_MODE = os.getenv("TEMPORAL_SEGMENT_MODE", "season").strip().lower()
+TEMPORAL_SEGMENT_SELECTION = os.getenv("TEMPORAL_SEGMENT_SELECTION", "largest").strip().lower()
 
 # ── Clustering ligues ────────────────────────────────────────
 # Groupes basés sur le profil offensif/défensif

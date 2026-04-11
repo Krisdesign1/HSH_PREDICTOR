@@ -42,9 +42,41 @@ def cmd_collect(args):
         print(f"✅ {n} nouveaux matchs collectés.")
     else:
         seasons = args.seasons or 3
-        print(f"🚀 Collecte complète — {seasons} saisons par ligue (~15h)")
-        print("   (Lance en arrière-plan avec: nohup python main.py collect &)")
-        reports = collector.collect_all(max_seasons=seasons)
+        leagues = collector.get_leagues()
+        selected = leagues
+
+        if args.country:
+            country_filter = args.country.strip().lower()
+            selected = [
+                league for league in selected
+                if country_filter in (league.get("country") or "").lower()
+            ]
+
+        if args.league_name:
+            requested = [value.strip().lower() for value in args.league_name if value.strip()]
+            selected = [
+                league for league in selected
+                if any(name in (league.get("name") or "").lower() for name in requested)
+            ]
+
+        if args.limit:
+            selected = selected[:args.limit]
+
+        if not selected:
+            print("⚠️  Aucune ligue ne correspond aux filtres demandés.")
+            return
+
+        if args.country or args.league_name or args.limit:
+            print(
+                f"🚀 Collecte ciblée — {len(selected)} ligue(s) | "
+                f"{seasons} saison(s) max par ligue"
+            )
+            reports = [collector.collect_league(league, max_seasons=seasons) for league in selected]
+        else:
+            print(f"🚀 Collecte complète — {seasons} saisons par ligue (~15h)")
+            print("   (Lance en arrière-plan avec: nohup python main.py collect &)")
+            reports = collector.collect_all(max_seasons=seasons)
+
         ok = sum(1 for r in reports if r.get("status") == "ok")
         print(f"✅ Collecte terminée : {ok}/{len(reports)} ligues avec data complète")
 
@@ -60,15 +92,50 @@ def cmd_cluster(args):
 
 def cmd_train(args):
     """Entraîne les modèles ML."""
-    from model import train_all_models, train_model
+    from model import train_all_models, train_model, train_temporal_model
+
+    if args.temporal:
+        temporal_kwargs = {"league_group": args.group}
+        for key in (
+            "protocol_mode",
+            "train_days",
+            "valid_days",
+            "test_days",
+            "train_matches",
+            "valid_matches",
+            "test_matches",
+        ):
+            value = getattr(args, key, None)
+            if value is not None:
+                temporal_kwargs[key] = value
+
+        result = train_temporal_model(**temporal_kwargs)
+        if result.get("status") != "ok":
+            print(f"⚠️  Entraînement temporel impossible : {result}")
+            return
+        test_metrics = result["test_metrics"]
+        print(
+            f"✅ Modèle temporel {result['scope']} : "
+            f"accuracy={test_metrics['accuracy']:.3f} | "
+            f"logloss={test_metrics['log_loss']:.4f}"
+        )
+        print(f"   Artefact : {result['model_path']}")
+        print(f"   Rapport  : {result['report_path']}")
+        return
 
     if args.group:
         result = train_model(args.group)
-        print(f"✅ Modèle groupe {args.group} : accuracy={result.get('accuracy', 'N/A'):.3f}")
+        if result.get("status") != "ok":
+            print(f"⚠️  Modèle groupe {args.group} : {result}")
+            return
+        print(f"✅ Modèle groupe {args.group} : accuracy={result['accuracy']:.3f}")
     else:
         results = train_all_models()
         for r in results:
             g = r.get('group')
+            if r.get("status") != "ok":
+                print(f"  Groupe {g} : {r.get('status')}")
+                continue
             a = r.get('accuracy', 0)
             print(f"  Groupe {g} : accuracy={a:.3f}")
 
@@ -114,7 +181,31 @@ def cmd_predict(args):
 
 def cmd_backtest(args):
     """Lance le backtesting."""
-    from backtest import run_backtest, run_all_backtests
+    from backtest import run_backtest, run_all_backtests, run_temporal_backtest
+
+    if args.temporal:
+        temporal_kwargs = {"league_group": args.group, "bankroll": args.bankroll}
+        for key in (
+            "protocol_mode",
+            "train_days",
+            "valid_days",
+            "test_days",
+            "step_days",
+            "train_matches",
+            "valid_matches",
+            "test_matches",
+            "step_matches",
+        ):
+            value = getattr(args, key, None)
+            if value is not None:
+                temporal_kwargs[key] = value
+
+        report = run_temporal_backtest(
+            **temporal_kwargs,
+        )
+        if report.get("status") != "ok":
+            print(f"⚠️  Backtest temporel impossible : {report}")
+        return
 
     if args.all:
         run_all_backtests(days_back=args.days, bankroll=args.bankroll)
@@ -154,6 +245,9 @@ def main():
     p_collect = sub.add_parser("collect", help="Collecter les données FootyStats")
     p_collect.add_argument("--today",   action="store_true", help="Seulement les matchs du jour")
     p_collect.add_argument("--seasons", type=int, default=3,  help="Nombre de saisons (défaut: 3)")
+    p_collect.add_argument("--league-name", action="append", default=[], help="Filtre nom de ligue (répétable)")
+    p_collect.add_argument("--country", type=str, help="Filtre pays")
+    p_collect.add_argument("--limit", type=int, default=0, help="Limiter le nombre de ligues collectées")
 
     # ── cluster ─────────────────────────────────────────────
     sub.add_parser("cluster", help="Mettre à jour les groupes de ligues")
@@ -161,6 +255,14 @@ def main():
     # ── train ───────────────────────────────────────────────
     p_train = sub.add_parser("train", help="Entraîner les modèles ML")
     p_train.add_argument("--group", type=str, help="Groupe spécifique (A/B/C)")
+    p_train.add_argument("--temporal", action="store_true", help="Entraînement chronologique global")
+    p_train.add_argument("--protocol-mode", type=str, choices=["days", "matches"], default=None, help="Protocole temporel")
+    p_train.add_argument("--train-days", type=int, default=None, help="Fenêtre train temporelle")
+    p_train.add_argument("--valid-days", type=int, default=None, help="Fenêtre validation temporelle")
+    p_train.add_argument("--test-days", type=int, default=None, help="Fenêtre test temporelle")
+    p_train.add_argument("--train-matches", type=int, default=None, help="Fenêtre train en nombre de matchs")
+    p_train.add_argument("--valid-matches", type=int, default=None, help="Fenêtre validation en nombre de matchs")
+    p_train.add_argument("--test-matches", type=int, default=None, help="Fenêtre test en nombre de matchs")
 
     # ── predict ─────────────────────────────────────────────
     p_pred = sub.add_parser("predict", help="Faire une prédiction")
@@ -178,6 +280,16 @@ def main():
     p_back.add_argument("--group",    type=str, help="Groupe spécifique")
     p_back.add_argument("--days",     type=int, default=90, help="Jours en arrière (défaut: 90)")
     p_back.add_argument("--bankroll", type=float, default=1000.0, help="Bankroll simulée")
+    p_back.add_argument("--temporal", action="store_true", help="Backtest walk-forward chronologique")
+    p_back.add_argument("--protocol-mode", type=str, choices=["days", "matches"], default=None, help="Protocole temporel")
+    p_back.add_argument("--train-days", type=int, default=None, help="Fenêtre train temporelle")
+    p_back.add_argument("--valid-days", type=int, default=None, help="Fenêtre validation temporelle")
+    p_back.add_argument("--test-days", type=int, default=None, help="Fenêtre test temporelle")
+    p_back.add_argument("--step-days", type=int, default=None, help="Pas entre les folds temporels")
+    p_back.add_argument("--train-matches", type=int, default=None, help="Fenêtre train en nombre de matchs")
+    p_back.add_argument("--valid-matches", type=int, default=None, help="Fenêtre validation en nombre de matchs")
+    p_back.add_argument("--test-matches", type=int, default=None, help="Fenêtre test en nombre de matchs")
+    p_back.add_argument("--step-matches", type=int, default=None, help="Pas entre les folds en nombre de matchs")
 
     # ── serve ────────────────────────────────────────────────
     p_serve = sub.add_parser("serve", help="Lancer l'application web")

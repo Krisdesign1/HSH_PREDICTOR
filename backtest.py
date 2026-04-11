@@ -3,10 +3,20 @@
 # ============================================================
 
 import logging
-import pandas as pd
 from datetime import datetime, timedelta
-from config import COTES, KELLY_FRACTION
-from database import get_conn, save_prediction
+from config import (
+    COTES,
+    TEMPORAL_PROTOCOL_MODE,
+    TEMPORAL_TRAIN_DAYS,
+    TEMPORAL_VALID_DAYS,
+    TEMPORAL_TEST_DAYS,
+    TEMPORAL_STEP_DAYS,
+    TEMPORAL_TRAIN_MATCHES,
+    TEMPORAL_VALID_MATCHES,
+    TEMPORAL_TEST_MATCHES,
+    TEMPORAL_STEP_MATCHES,
+)
+from database import get_conn
 from model import predict_match
 from value_bet import full_value_analysis, kelly_criterion
 import psycopg2.extras
@@ -164,6 +174,153 @@ def run_backtest(
     return report
 
 
+def run_temporal_backtest(
+    league_group: str = None,
+    bankroll: float = 1000.0,
+    protocol_mode: str = TEMPORAL_PROTOCOL_MODE,
+    train_days: int = TEMPORAL_TRAIN_DAYS,
+    valid_days: int = TEMPORAL_VALID_DAYS,
+    test_days: int = TEMPORAL_TEST_DAYS,
+    step_days: int = TEMPORAL_STEP_DAYS,
+    train_matches: int = TEMPORAL_TRAIN_MATCHES,
+    valid_matches: int = TEMPORAL_VALID_MATCHES,
+    test_matches: int = TEMPORAL_TEST_MATCHES,
+    step_matches: int = TEMPORAL_STEP_MATCHES,
+) -> dict:
+    """
+    Backtest walk-forward strict.
+    Les probabilités proviennent de folds entraînés uniquement sur le passé.
+    """
+    from model import walk_forward_temporal_evaluation
+
+    evaluation = walk_forward_temporal_evaluation(
+        league_group=league_group,
+        protocol_mode=protocol_mode,
+        train_days=train_days,
+        valid_days=valid_days,
+        test_days=test_days,
+        step_days=step_days,
+        train_matches=train_matches,
+        valid_matches=valid_matches,
+        test_matches=test_matches,
+        step_matches=step_matches,
+    )
+    if evaluation.get("status") != "ok":
+        logger.warning("⚠️  Backtest temporel impossible : %s", evaluation)
+        return evaluation
+
+    predictions = sorted(evaluation["predictions"], key=lambda item: item["match_date"])
+
+    current_bankroll = bankroll
+    total_bets = 0
+    correct_bets = 0
+    total_profit = 0.0
+    bet_results = []
+
+    for prediction in predictions:
+        final_probs = {
+            "final_prob_h1": prediction["prob_h1"],
+            "final_prob_h2": prediction["prob_h2"],
+            "final_prob_eq": prediction["prob_eq"],
+        }
+        analysis = full_value_analysis(final_probs, current_bankroll)
+        actual_result = prediction["actual_result"]
+
+        if not analysis["is_value_bet"]:
+            bet_results.append(
+                {
+                    "match_id": prediction["match_id"],
+                    "date": prediction["match_date"],
+                    "bet": "NO_BET",
+                    "actual": actual_result,
+                    "profit": 0.0,
+                    "bankroll": round(current_bankroll, 2),
+                }
+            )
+            continue
+
+        rec = analysis["recommendation"]
+        stake = analysis.get("kelly", {}).get("stake", 0.0) if analysis.get("kelly") else 0.0
+        if stake <= 0:
+            continue
+
+        won = rec == actual_result
+        profit = round(stake * (COTES[rec] - 1), 2) if won else round(-stake, 2)
+        current_bankroll += profit
+        total_profit += profit
+        total_bets += 1
+        if won:
+            correct_bets += 1
+
+        bet_results.append(
+            {
+                "match_id": prediction["match_id"],
+                "date": prediction["match_date"],
+                "bet": rec,
+                "actual": actual_result,
+                "stake": round(stake, 2),
+                "profit": profit,
+                "bankroll": round(current_bankroll, 2),
+                "won": won,
+                "edge_pct": analysis.get("edge_pct", 0.0),
+                "ev": analysis.get("best_ev", 0.0),
+            }
+        )
+
+    accuracy = correct_bets / max(total_bets, 1)
+    roi = (total_profit / bankroll) * 100
+
+    report = {
+        "status": "ok",
+        "mode": "temporal_walk_forward",
+        "league_group": league_group,
+        "protocol": evaluation["protocol"],
+        "folds_run": evaluation["folds_run"],
+        "folds_skipped": evaluation.get("folds_skipped", []),
+        "model_metrics": evaluation["aggregate_metrics"],
+        "betting_simulation": {
+            "starting_bankroll": bankroll,
+            "final_bankroll": round(current_bankroll, 2),
+            "total_profit": round(total_profit, 2),
+            "roi": round(roi, 2),
+            "total_bets": total_bets,
+            "correct_bets": correct_bets,
+            "accuracy": round(accuracy, 4),
+            "no_bets": len(predictions) - total_bets,
+        },
+        "results": bet_results,
+        "report_path": evaluation.get("report_path"),
+    }
+
+    _print_temporal_backtest_report(report)
+
+    try:
+        with get_conn() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                INSERT INTO backtest_results
+                (league_group, total_bets, correct_bets, accuracy, roi, total_profit, model_version)
+                VALUES (%s, %s, %s, %s, %s, %s, 'temporal_walk_forward')
+                """,
+                (
+                    league_group,
+                    total_bets,
+                    correct_bets,
+                    accuracy,
+                    roi,
+                    total_profit,
+                ),
+            )
+        report["db_persisted"] = True
+    except Exception as exc:
+        logger.warning("⚠️  Sauvegarde DB du backtest temporel impossible : %s", exc)
+        report["db_persisted"] = False
+        report["persistence_warning"] = str(exc)
+
+    return report
+
+
 def _print_backtest_report(report: dict):
     """Affiche un résumé lisible du backtest."""
     sep = "─" * 50
@@ -182,6 +339,51 @@ def _print_backtest_report(report: dict):
     print(f"  ROI          : {roi_emoji} {report['roi']:+.1f}%")
     print(f"  Profit net   : {report['total_profit']:+.2f}$")
     print(f"  Bankroll fin : {report['final_bankroll']:.2f}$")
+    print(f"{'═'*50}\n")
+
+
+def _print_temporal_backtest_report(report: dict):
+    """Résumé lisible du backtest walk-forward."""
+    metrics = report["model_metrics"]
+    sim = report["betting_simulation"]
+    protocol = report["protocol"]
+    sep = "─" * 50
+
+    if protocol.get("protocol_mode") == "matches":
+        windows_label = (
+            f"train={protocol['train_matches']}m | "
+            f"valid={protocol['valid_matches']}m | "
+            f"test={protocol['test_matches']}m | "
+            f"step={protocol['step_matches']}m"
+        )
+    else:
+        windows_label = (
+            f"train={protocol['train_days']}j | "
+            f"valid={protocol['valid_days']}j | "
+            f"test={protocol['test_days']}j | "
+            f"step={protocol['step_days']}j"
+        )
+
+    print(f"\n{'═'*50}")
+    print(f"  RAPPORT BACKTEST TEMPOREL — {report['league_group'] or 'GLOBAL'}")
+    print(f"{'═'*50}")
+    print(f"  Protocole    : {protocol.get('protocol_mode', 'days')}")
+    print(f"  Fenêtres     : {windows_label}")
+    print(f"  Folds        : {report['folds_run']} | skips={len(report['folds_skipped'])}")
+    print(sep)
+    print(f"  MODEL")
+    print(f"  Lignes scorées : {metrics['rows']}")
+    print(f"  Accuracy      : {metrics['accuracy']:.1%}")
+    print(f"  Log Loss      : {metrics['log_loss']:.4f}")
+    print(f"  Brier         : {metrics['brier_score']:.4f}")
+    print(sep)
+    print(f"  BETTING SIM")
+    print(f"  Paris joués   : {sim['total_bets']}")
+    print(f"  Corrects      : {sim['correct_bets']}")
+    print(f"  Accuracy      : {sim['accuracy']:.1%}")
+    print(f"  ROI           : {sim['roi']:+.2f}%")
+    print(f"  Profit net    : {sim['total_profit']:+.2f}$")
+    print(f"  Bankroll fin  : {sim['final_bankroll']:.2f}$")
     print(f"{'═'*50}\n")
 
 
